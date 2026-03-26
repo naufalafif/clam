@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
+        run: swift build -c release
+
+  lint:
+    name: Lint & Format
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install swiftlint swift-format
+
+      - name: SwiftLint
+        run: swiftlint lint --strict Sources/
+
+      - name: swift-format check
+        run: swift-format lint --recursive Sources/
+
+  pr-title:
+    name: PR Title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check conventional commit format
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$TITLE" | grep -qE '^(feat|fix|chore|docs|refactor|test|ci|security|release):'; then
+            echo "PR title OK: $TITLE"
+          else
+            echo "::error::PR title must start with: feat:, fix:, chore:, docs:, refactor:, test:, ci:, security:, or release:"
+            echo "Got: $TITLE"
+            exit 1
+          fi
+
+  security:
+    name: Security
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for secrets in source
+        run: |
+          echo "Scanning for potential secrets..."
+          FOUND=0
+          if grep -rn --include='*.swift' -iE '(api_key|apikey|secret|password|token)\s*[:=]\s*"[^"]{8,}"' Sources/; then
+            echo "::warning::Potential hardcoded secrets found"
+            FOUND=1
+          fi
+          if grep -rn --include='*.swift' -iE '(sk-|ghp_|gho_|github_pat_)' Sources/; then
+            echo "::error::API key pattern detected in source"
+            FOUND=1
+          fi
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No secrets found"
+          fi
+
+      - name: Check dependencies
+        run: |
+          if [ -f Package.resolved ]; then
+            echo "External dependencies found — review manually:"
+            cat Package.resolved
+          else
+            echo "No external dependencies"
+          fi

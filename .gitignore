@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+
+# Build artifacts
+*.app/
+*.ipa
+*.dSYM.zip
+*.dSYM
+dist/
+
+# Code signing
+*.mobileprovision
+*.provisionprofile
+
+# Environment / secrets
+.env
+.env.*
