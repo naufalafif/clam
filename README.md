@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/clam-appicon-1024.png" width="128" height="128" alt="Clam icon">
+  <img src="assets/icon.png" width="128" height="128" alt="Clam icon">
 </p>
 
 <h3 align="center">Clam</h3>
