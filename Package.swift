@@ -7,7 +7,15 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Clam",
-            path: "Sources/Clam"
+            path: "Sources/Clam",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Info.plist",
+                ]),
+            ]
         ),
     ]
 )
