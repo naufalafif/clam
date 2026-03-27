@@ -91,7 +91,7 @@ actor UsageMonitor {
 
     // MARK: - Rate limit parsing (reads ~/.claude/usage-cache.json)
 
-    private struct RateLimits {
+    struct RateLimits {
         let fiveHour: RateLimit
         let sevenDay: RateLimit
         let sevenDaySonnet: RateLimit?
@@ -99,7 +99,7 @@ actor UsageMonitor {
 
     // MARK: - Parsing helpers (internal for testing)
 
-    static func parseRateLimitJSON(_ json: [String: Any]) -> (fiveHour: RateLimit, sevenDay: RateLimit, sevenDaySonnet: RateLimit?) {
+    static func parseRateLimitJSON(_ json: [String: Any]) -> RateLimits {
         func parseLimit(_ key: String) -> RateLimit? {
             guard let block = json[key] as? [String: Any] else { return nil }
             let utilization = ((block["utilization"] as? Double) ?? 0) / 100.0
@@ -112,7 +112,7 @@ actor UsageMonitor {
             return RateLimit(utilization: utilization, resetsAt: resetsAt)
         }
 
-        return (
+        return RateLimits(
             fiveHour: parseLimit("five_hour") ?? .empty,
             sevenDay: parseLimit("seven_day") ?? .empty,
             sevenDaySonnet: parseLimit("seven_day_sonnet")
