@@ -24,19 +24,18 @@ func shellEscape(_ s: String) -> String {
     "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
-func buildResumeCommand(sessionId: String, cwd: String) -> (shellCmd: String, claudePath: String)? {
+func buildResumeCommand(sessionId: String, cwd: String) -> (cmd: String, claudePath: String)? {
     guard sessionId.range(of: #"^[0-9a-fA-F\-]{36}$"#, options: .regularExpression) != nil else {
         return nil
     }
     let claudePath = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude",
                       "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/claude"]
         .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "claude"
-    let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId); exec $SHELL"
-    return (shellCmd, claudePath)
+    let cmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
+    return (cmd, claudePath)
 }
 
-func buildAppleScript(app: String, claudePath: String, sessionId: String, cwd: String) -> String {
-    let cmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
+func buildAppleScript(app: String, cmd: String) -> String {
     if app == "iTerm" {
         return """
         tell application "iTerm"
@@ -80,14 +79,14 @@ assert(shellEscape("$(whoami)") == "'$(whoami)'",
 assert(shellEscape("test`id`") == "'test`id`'",
        "neutralizes backtick injection")
 
-print("\n── Shell command construction ──")
+print("\n── Command construction ──")
 if let result = buildResumeCommand(sessionId: uuid, cwd: "/Users/test/project") {
-    assert(result.shellCmd.contains("cd '/Users/test/project'"),
-           "shell command contains cd into cwd")
-    assert(result.shellCmd.contains("--resume \(uuid)"),
-           "shell command contains --resume with session ID")
-    assert(result.shellCmd.contains("exec $SHELL"),
-           "shell command keeps window open with exec $SHELL")
+    assert(result.cmd.contains("cd '/Users/test/project'"),
+           "command contains cd into cwd")
+    assert(result.cmd.contains("--resume \(uuid)"),
+           "command contains --resume with session ID")
+    assert(!result.cmd.contains("exec $SHELL"),
+           "command does NOT have exec $SHELL (terminal stays open naturally)")
     assert(result.claudePath == "claude" || result.claudePath.hasPrefix("/"),
            "claude path is absolute (\(result.claudePath)) or bare fallback")
     if result.claudePath != "claude" {
@@ -99,8 +98,8 @@ if let result = buildResumeCommand(sessionId: uuid, cwd: "/Users/test/project") 
 }
 
 print("\n── AppleScript construction ──")
-let termScript = buildAppleScript(app: "Terminal", claudePath: "/usr/local/bin/claude",
-                                   sessionId: uuid, cwd: "/Users/test/project")
+let cmd = "cd '/Users/test/project' && '/usr/local/bin/claude' --resume \(uuid)"
+let termScript = buildAppleScript(app: "Terminal", cmd: cmd)
 assert(termScript.contains("tell application \"Terminal\""),
        "Terminal script targets Terminal.app")
 assert(termScript.contains("do script"),
@@ -110,21 +109,19 @@ assert(termScript.contains("cd '/Users/test/project'"),
 assert(termScript.contains("'/usr/local/bin/claude' --resume \(uuid)"),
        "Terminal script uses absolute claude path and --resume")
 
-let itermScript = buildAppleScript(app: "iTerm", claudePath: "/usr/local/bin/claude",
-                                    sessionId: uuid, cwd: "/tmp")
+let itermScript = buildAppleScript(app: "iTerm", cmd: cmd)
 assert(itermScript.contains("tell application \"iTerm\""),
        "iTerm script targets iTerm")
 assert(itermScript.contains("create window with default profile command"),
        "iTerm script uses create window")
 
-let quoteScript = buildAppleScript(app: "Terminal", claudePath: "/usr/local/bin/claude",
-                                    sessionId: uuid, cwd: "/Users/test/it's here")
+let quoteCmd = "cd '/Users/test/it'\\''s here' && '/usr/local/bin/claude' --resume \(uuid)"
+let quoteScript = buildAppleScript(app: "Terminal", cmd: quoteCmd)
 assert(quoteScript.contains("cd '/Users/test/it'\\''s here'"),
        "AppleScript escapes single quotes in cwd")
 
-print("\n── End-to-end: AppleScript is valid (compiles) ──")
-let testScript = buildAppleScript(app: "Terminal", claudePath: "/usr/local/bin/claude",
-                                   sessionId: uuid, cwd: "/Users/test/project")
+print("\n── End-to-end: AppleScript compiles ──")
+let testScript = buildAppleScript(app: "Terminal", cmd: cmd)
 let proc = Process()
 proc.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
 proc.arguments = ["-e", testScript, "-o", "/dev/null"]

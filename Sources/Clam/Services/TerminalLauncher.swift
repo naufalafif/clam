@@ -1,5 +1,8 @@
 import AppKit
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.naufal.clam", category: "TerminalLauncher")
 
 // MARK: - Launch a terminal with claude --resume <sessionId>
 
@@ -38,41 +41,38 @@ actor TerminalLauncher {
     }
 
     func resume(sessionId: String, cwd: String, preferred: PreferredTerminal) {
+        logger.info("resume: sessionId=\(sessionId) cwd=\(cwd) preferred=\(preferred.rawValue)")
+
         // SECURITY: validate sessionId is a UUID — prevents command/AppleScript injection
         guard sessionId.range(of: #"^[0-9a-fA-F\-]{36}$"#, options: .regularExpression) != nil else {
+            logger.error("resume: invalid sessionId rejected")
             return
         }
 
         let terminal = resolveTerminal(preferred: preferred)
         let claudePath = findClaude() ?? "claude"
+        let cmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
+        logger.info("resume: resolved terminal=\(terminal.rawValue) claude=\(claudePath)")
+        logger.info("resume: cmd=\(cmd)")
 
-        // Build a shell command that cd's into the project and resumes.
-        // Uses login shell (-l) so the user's full PATH/env is available.
-        // The trailing `; exec $SHELL` keeps the window open if claude exits.
-        let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId); exec $SHELL"
-
+        // Use AppleScript to launch — it's the only reliable way to get a real
+        // TTY on macOS. Process-based launching pipes stdout/stderr to /dev/null
+        // which breaks claude's TUI. Ghostty/Alacritty/WezTerm don't support
+        // AppleScript or reliable CLI launching on macOS, so we fall back to
+        // Terminal.app for those.
         switch terminal {
-        case .ghostty:
-            launchCLI(bundleId: "com.mitchellh.ghostty", binaryName: "ghostty",
-                      args: ["-e", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
-        case .alacritty:
-            launchCLI(bundleId: "io.alacritty", binaryName: "alacritty",
-                      args: ["-e", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
-        case .wezterm:
-            launchCLI(bundleId: "com.github.wez.wezterm", binaryName: "wezterm",
-                      args: ["start", "--cwd", cwd, "--", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
         case .iterm2:
-            launchViaAppleScript(app: "iTerm", claudePath: claudePath, sessionId: sessionId, cwd: cwd)
-        case .terminal, .automatic:
-            launchViaAppleScript(app: "Terminal", claudePath: claudePath, sessionId: sessionId, cwd: cwd)
+            launchViaAppleScript(app: "iTerm", cmd: cmd)
+        default:
+            launchViaAppleScript(app: "Terminal", cmd: cmd)
         }
     }
 
     // MARK: - Command building (internal for testing)
 
     struct ResumeCommand {
-        let shellCmd: String       // full shell command string
-        let claudePath: String     // resolved absolute path to claude
+        let shellCmd: String
+        let claudePath: String
         let cwd: String
         let sessionId: String
     }
@@ -82,12 +82,11 @@ actor TerminalLauncher {
             return nil
         }
         let claudePath = findClaude() ?? "claude"
-        let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId); exec $SHELL"
+        let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
         return ResumeCommand(shellCmd: shellCmd, claudePath: claudePath, cwd: cwd, sessionId: sessionId)
     }
 
-    func buildAppleScript(app: String, claudePath: String, sessionId: String, cwd: String) -> String {
-        let cmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
+    func buildAppleScript(app: String, cmd: String) -> String {
         if app == "iTerm" {
             return """
             tell application "iTerm"
@@ -119,35 +118,19 @@ actor TerminalLauncher {
         return order.first(where: \.isInstalled) ?? .terminal
     }
 
-    private func launchCLI(bundleId: String, binaryName: String, args: [String], cwd: String, claudePath: String) {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-            let binary = appURL.appendingPathComponent("Contents/MacOS/\(binaryName)")
-            if FileManager.default.isExecutableFile(atPath: binary.path) {
-                launchProcess(binary.path, args: args, cwd: cwd)
-                return
+    private func debugLog(_ msg: String) {
+        let logPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/clam/debug.log")
+        let entry = "[\(Date())] \(msg)\n"
+        if let data = entry.data(using: .utf8) {
+            if let handle = try? FileHandle(forWritingTo: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: logPath)
             }
         }
-
-        let paths = ["/opt/homebrew/bin/\(binaryName)", "/usr/local/bin/\(binaryName)"]
-        if let found = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            launchProcess(found, args: args, cwd: cwd)
-            return
-        }
-
-        // Fallback to Terminal.app via AppleScript
-        launchViaAppleScript(app: "Terminal", claudePath: claudePath, sessionId: args.last ?? "", cwd: cwd)
-    }
-
-    private func launchProcess(_ path: String, args: [String], cwd: String? = nil) {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: path)
-        task.arguments = args
-        if let cwd, FileManager.default.fileExists(atPath: cwd) {
-            task.currentDirectoryURL = URL(fileURLWithPath: cwd)
-        }
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
     }
 
     /// Shell-escape a string by wrapping in single quotes
@@ -155,11 +138,24 @@ actor TerminalLauncher {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func launchViaAppleScript(app: String, claudePath: String, sessionId: String, cwd: String) {
-        let script = buildAppleScript(app: app, claudePath: claudePath, sessionId: sessionId, cwd: cwd)
+    /// Launch via AppleScript — works for Terminal.app and iTerm2.
+    /// These apps have native AppleScript support for running commands.
+    private func launchViaAppleScript(app: String, cmd: String) {
+        let script = buildAppleScript(app: app, cmd: cmd)
+        logger.info("launchViaAppleScript: app=\(app)")
+        logger.debug("launchViaAppleScript: script=\(script)")
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
             appleScript.executeAndReturnError(&error)
+            if let error {
+                logger.error("AppleScript error: \(error)")
+                debugLog("AppleScript ERROR: \(error)\nScript: \(script)")
+            } else {
+                logger.info("AppleScript executed successfully")
+                debugLog("AppleScript OK for app=\(app)")
+            }
+        } else {
+            logger.error("Failed to create NSAppleScript")
         }
     }
 }

@@ -20,5 +20,7 @@
     <string>NSApplication</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Clam needs to open your terminal to resume Claude sessions.</string>
 </dict>
 </plist>
