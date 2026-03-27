@@ -52,6 +52,8 @@ struct PastSession: Identifiable {
     let projectDir: String
     let lastMessageAt: Date
     let firstUserMessage: String
+    var isActive: Bool = false
+    var terminal: DetectedTerminal?
 
     var id: String { sessionId }
 

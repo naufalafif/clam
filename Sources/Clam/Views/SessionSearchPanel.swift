@@ -23,6 +23,8 @@ class SessionSearchPanelController {
     private var sessionCache: [PastSession] = []
     private var cacheDate: Date?
     private let cacheTTL: TimeInterval = 30
+    private var onFocusSession: ((ActiveSession) -> Void)?
+    private var currentActiveSessions: [ActiveSession] = []
 
     init(launcher: TerminalLauncher, monitor: SessionMonitor) {
         self.launcher = launcher
@@ -36,11 +38,28 @@ class SessionSearchPanelController {
         cacheDate = Date()
     }
 
-    func show(preferredTerminal: TerminalLauncher.PreferredTerminal, activeSessionIds: Set<String> = []) {
+    func show(
+        preferredTerminal: TerminalLauncher.PreferredTerminal,
+        activeSessions: [ActiveSession] = [],
+        onFocusSession: ((ActiveSession) -> Void)? = nil
+    ) {
         if let existing = panel, existing.isVisible {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
+        }
+
+        let activeSessionIds = Set(activeSessions.map(\.sessionId))
+        let activeAsPast = activeSessions.map { session in
+            PastSession(
+                sessionId: session.sessionId,
+                cwd: session.cwd,
+                projectDir: "",
+                lastMessageAt: session.startedAt,
+                firstUserMessage: "",
+                isActive: true,
+                terminal: session.terminal
+            )
         }
 
         let hasCachedData = !sessionCache.isEmpty
@@ -49,9 +68,12 @@ class SessionSearchPanelController {
 
         // Show panel immediately with whatever we have
         model = SessionSearchModel()
-        model.sessions = sessionCache.filter { !activeSessionIds.contains($0.sessionId) }
-        model.isLoading = !hasCachedData
+        let pastOnly = sessionCache.filter { !activeSessionIds.contains($0.sessionId) }
+        model.sessions = activeAsPast + pastOnly
+        model.isLoading = !hasCachedData && activeSessions.isEmpty
         model.isRefreshing = hasCachedData && cacheStale
+        self.onFocusSession = onFocusSession
+        self.currentActiveSessions = activeSessions
         presentPanel(preferredTerminal: preferredTerminal)
 
         // Only re-fetch if cache is empty or stale
@@ -61,8 +83,9 @@ class SessionSearchPanelController {
             let all = await monitor.fetchPastSessions()
             sessionCache = all
             cacheDate = Date()
+            let pastFiltered = all.filter { !activeSessionIds.contains($0.sessionId) }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                model.sessions = all.filter { !activeSessionIds.contains($0.sessionId) }
+                model.sessions = activeAsPast + pastFiltered
                 model.isLoading = false
                 model.isRefreshing = false
             }
@@ -72,15 +95,21 @@ class SessionSearchPanelController {
     private func presentPanel(preferredTerminal: TerminalLauncher.PreferredTerminal) {
         let view = SessionSearchView(
             model: model,
-            onResume: { [weak self] session in
+            onSelect: { [weak self] session in
                 guard let self else { return }
-                Task {
-                    await self.launcher.resume(
-                        sessionId: session.sessionId,
-                        cwd: session.cwd,
-                        preferred: preferredTerminal
-                    )
+                if session.isActive,
+                   let active = self.currentActiveSessions.first(where: { $0.sessionId == session.sessionId }) {
+                    self.onFocusSession?(active)
                     self.panel?.close()
+                } else {
+                    Task {
+                        await self.launcher.resume(
+                            sessionId: session.sessionId,
+                            cwd: session.cwd,
+                            preferred: preferredTerminal
+                        )
+                        self.panel?.close()
+                    }
                 }
             },
             onClose: { [weak self] in self?.panel?.close() }
@@ -117,7 +146,7 @@ class SessionSearchPanelController {
 
 struct SessionSearchView: View {
     @ObservedObject var model: SessionSearchModel
-    let onResume: (PastSession) -> Void
+    let onSelect: (PastSession) -> Void
     let onClose: () -> Void
 
     @State private var query = ""
@@ -191,7 +220,7 @@ struct SessionSearchView: View {
                                 PastSessionRowView(
                                     session: session,
                                     isSelected: selectedId == session.id
-                                ) { onResume(session) }
+                                ) { onSelect(session) }
                                 .onHover { if $0 { selectedId = session.id } }
                                 .transition(.asymmetric(
                                     insertion: .opacity.combined(with: .move(edge: .top)),
@@ -232,7 +261,7 @@ struct SessionSearchView: View {
                     .animation(.easeInOut(duration: 0.2), value: model.isRefreshing)
                 }
                 Spacer()
-                Text("↵ resume  ·  esc close")
+                Text("↵ select  ·  esc close")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -243,9 +272,9 @@ struct SessionSearchView: View {
         .frame(width: 560, height: 420)
         .background(KeyEventHandler(onEscape: onClose, onReturn: {
             if let id = selectedId, let session = filtered.first(where: { $0.id == id }) {
-                onResume(session)
+                onSelect(session)
             } else if let first = filtered.first {
-                onResume(first)
+                onSelect(first)
             }
         }))
     }
@@ -256,13 +285,18 @@ struct SessionSearchView: View {
 struct PastSessionRowView: View {
     let session: PastSession
     let isSelected: Bool
-    let onResume: () -> Void
+    let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onResume) {
+        Button(action: onSelect) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
+                        if session.isActive {
+                            Circle()
+                                .fill(Color(hex: "#22c55e"))
+                                .frame(width: 6, height: 6)
+                        }
                         Text(session.displayName)
                             .font(.system(size: 13, weight: .medium))
                             .lineLimit(1)
@@ -271,9 +305,15 @@ struct PastSessionRowView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer()
-                        Text(session.relativeDate)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                        if session.isActive {
+                            Text("active")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Color(hex: "#22c55e"))
+                        } else {
+                            Text(session.relativeDate)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     if !session.firstUserMessage.isEmpty {
                         Text(session.firstUserMessage)
