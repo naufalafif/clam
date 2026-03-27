@@ -69,17 +69,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: MenuContentView(
                 state: state,
                 onFocusSession: { [weak self] session in self?.focusSession(session) },
-                onOpenSearch:   { [weak self] in self?.openSearch() },
-                onRefresh:      { [weak self] in
+                onOpenSearch: { [weak self] in self?.openSearch() },
+                onRefresh: { [weak self] in
                     guard let self else { return }
                     self.state.isRefreshing = true
-                    Task {
-                        await self.refreshSessions()
-                        await self.refreshUsage()
+                    Task { [weak self] in
+                        await self?.refreshSessions()
+                        await self?.refreshUsage()
                     }
                 },
-                onSettings:     { [weak self] in self?.showSettings() },
-                onQuit:         { NSApplication.shared.terminate(nil) }
+                onSettings: { [weak self] in self?.showSettings() },
+                onQuit: { NSApplication.shared.terminate(nil) }
             )
         )
     }
@@ -174,10 +174,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: win, queue: .main
             ) { [weak self] _ in
-                Task { @MainActor in
-                    self?.settingsWindow = nil
-                    NSApp.setActivationPolicy(.accessory)
-                }
+                guard let self else { return }
+                self.settingsWindow = nil
+                NSApp.setActivationPolicy(.accessory)
             }
         }
 
