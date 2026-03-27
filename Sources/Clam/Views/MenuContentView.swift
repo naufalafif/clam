@@ -147,7 +147,7 @@ struct MenuContentView: View {
             .buttonStyle(.plain)
             .hoverEffect()
             .disabled(state.isRefreshing)
-            menuButton(label: "Search Sessions…", icon: "magnifyingglass", shortcut: "⌘K") { onOpenSearch() }
+            menuButton(label: "Search Sessions…", icon: "magnifyingglass") { onOpenSearch() }
             menuButton(label: "Settings…", icon: "gearshape") { onSettings() }
             Divider().padding(.vertical, 2)
             menuButton(label: "Quit", icon: "power") { onQuit() }

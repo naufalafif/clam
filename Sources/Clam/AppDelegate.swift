@@ -42,7 +42,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupPopover()
         setupSearchPanel()
-        setupGlobalShortcut()
         startPolling()
     }
 
@@ -84,15 +83,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 onQuit: { NSApplication.shared.terminate(nil) }
             )
         )
-    }
-
-    private func setupGlobalShortcut() {
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // ⌘K
-            if event.modifierFlags.contains(.command) && event.keyCode == 40 {
-                Task { @MainActor in self?.openSearch() }
-            }
-        }
     }
 
     private func setupSearchPanel() {
