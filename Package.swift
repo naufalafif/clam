@@ -5,9 +5,14 @@ let package = Package(
     name: "Clam",
     platforms: [.macOS(.v13)],
     targets: [
+        .target(
+            name: "ClamLib",
+            path: "Sources/Clam"
+        ),
         .executableTarget(
             name: "Clam",
-            path: "Sources/Clam",
+            dependencies: ["ClamLib"],
+            path: "Sources/ClamEntry",
             linkerSettings: [
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
@@ -16,6 +21,10 @@ let package = Package(
                     "-Xlinker", "Info.plist",
                 ]),
             ]
+        ),
+        .testTarget(
+            name: "ClamTests",
+            dependencies: ["ClamLib"]
         ),
     ]
 )

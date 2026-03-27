@@ -76,7 +76,7 @@ format-check:
 
 test:
 	@echo "--- Tests ---"
-	@swift Tests/test_terminal_launcher.swift
+	swift test
 
 check: build test lint format-check
 	@echo "All checks passed"

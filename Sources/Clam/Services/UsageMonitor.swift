@@ -97,17 +97,14 @@ actor UsageMonitor {
         let sevenDaySonnet: RateLimit?
     }
 
-    private func readRateLimits() -> RateLimits {
-        guard let data = try? Data(contentsOf: cacheFile),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return RateLimits(fiveHour: .empty, sevenDay: .empty, sevenDaySonnet: nil) }
+    // MARK: - Parsing helpers (internal for testing)
 
+    static func parseRateLimitJSON(_ json: [String: Any]) -> (fiveHour: RateLimit, sevenDay: RateLimit, sevenDaySonnet: RateLimit?) {
         func parseLimit(_ key: String) -> RateLimit? {
             guard let block = json[key] as? [String: Any] else { return nil }
             let utilization = ((block["utilization"] as? Double) ?? 0) / 100.0
             var resetsAt: Date?
             if let iso = block["resets_at"] as? String {
-                // resets_at includes fractional seconds: "2026-03-27T03:00:00.845537+00:00"
                 let fmt = ISO8601DateFormatter()
                 fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
                 resetsAt = fmt.date(from: iso)
@@ -115,10 +112,31 @@ actor UsageMonitor {
             return RateLimit(utilization: utilization, resetsAt: resetsAt)
         }
 
-        return RateLimits(
+        return (
             fiveHour: parseLimit("five_hour") ?? .empty,
             sevenDay: parseLimit("seven_day") ?? .empty,
             sevenDaySonnet: parseLimit("seven_day_sonnet")
+        )
+    }
+
+    static func parseTokenJSON(_ json: [String: Any]) -> TokenUsage? {
+        guard let totals = json["totals"] as? [String: Any],
+              let tokens = totals["totalTokens"] as? Int,
+              let cost   = totals["totalCost"] as? Double
+        else { return nil }
+        return TokenUsage(tokens: tokens, cost: cost)
+    }
+
+    private func readRateLimits() -> RateLimits {
+        guard let data = try? Data(contentsOf: cacheFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return RateLimits(fiveHour: .empty, sevenDay: .empty, sevenDaySonnet: nil) }
+
+        let parsed = Self.parseRateLimitJSON(json)
+        return RateLimits(
+            fiveHour: parsed.fiveHour,
+            sevenDay: parsed.sevenDay,
+            sevenDaySonnet: parsed.sevenDaySonnet
         )
     }
 
@@ -185,12 +203,9 @@ actor UsageMonitor {
 
     private func parseTokenFile(_ file: URL) -> TokenUsage? {
         guard let data = try? Data(contentsOf: file),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let totals = json["totals"] as? [String: Any],
-              let tokens = totals["totalTokens"] as? Int,
-              let cost   = totals["totalCost"] as? Double
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return TokenUsage(tokens: tokens, cost: cost)
+        return Self.parseTokenJSON(json)
     }
 
     private static func dateString(offsetDays: Int) -> String {

@@ -130,50 +130,60 @@ actor SessionMonitor {
         return nil
     }
 
-    /// Fast parse: only reads the first 15 lines (enough for metadata + first message).
-    /// Uses file modification date for lastMessageAt — avoids scanning thousands of lines.
-    private func parsePastSession(from file: URL, projectDir: String) -> PastSession? {
-        // Use file mtime as lastMessageAt — fast, no line scanning needed
-        let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+    // MARK: - Parsing helper (internal for testing)
 
-        // Read only the first 15 lines via FileHandle — never loads the whole file
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
-        defer { try? handle.close() }
-
+    /// Parse JSONL session data from raw bytes.
+    /// Reads up to 15 lines to extract sessionId, cwd, and first user message.
+    static func parsePastSessionData(
+        _ data: Data,
+        fileModificationDate: Date,
+        projectDir: String
+    ) -> PastSession? {
         var sessionId: String?
         var cwd: String?
         var firstUserMessage: String?
         var linesRead = 0
-        var buffer = Data()
+        var startIndex = data.startIndex
 
-        while linesRead < 15 {
-            let chunk = handle.readData(ofLength: 512)
-            if chunk.isEmpty { break }
-            buffer.append(chunk)
-
-            // Process complete lines from buffer
-            while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let lineData = buffer[buffer.startIndex..<newline]
-                buffer = buffer[buffer.index(after: newline)...]
-                linesRead += 1
-
-                guard let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
-                else { continue }
-
-                if sessionId == nil {
-                    sessionId = json["sessionId"] as? String
-                    cwd = json["cwd"] as? String
+        while linesRead < 15, startIndex < data.endIndex {
+            guard let newline = data[startIndex...].firstIndex(of: UInt8(ascii: "\n")) else {
+                // Handle last line without trailing newline
+                let lineData = data[startIndex...]
+                if !lineData.isEmpty { linesRead += 1 }
+                if let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] {
+                    if sessionId == nil {
+                        sessionId = json["sessionId"] as? String
+                        cwd = json["cwd"] as? String
+                    }
+                    if firstUserMessage == nil,
+                       json["type"] as? String == "user",
+                       let msg = json["message"] as? [String: Any],
+                       let text = msg["content"] as? String,
+                       !text.hasPrefix("<") {
+                        firstUserMessage = String(text.prefix(120))
+                    }
                 }
+                break
+            }
 
-                if firstUserMessage == nil,
-                   json["type"] as? String == "user",
-                   let msg = json["message"] as? [String: Any],
-                   let text = msg["content"] as? String,
-                   !text.hasPrefix("<") {
-                    firstUserMessage = String(text.prefix(120))
-                }
+            let lineData = data[startIndex..<newline]
+            startIndex = data.index(after: newline)
+            linesRead += 1
 
-                if linesRead >= 15 { break }
+            guard let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any]
+            else { continue }
+
+            if sessionId == nil {
+                sessionId = json["sessionId"] as? String
+                cwd = json["cwd"] as? String
+            }
+
+            if firstUserMessage == nil,
+               json["type"] as? String == "user",
+               let msg = json["message"] as? [String: Any],
+               let text = msg["content"] as? String,
+               !text.hasPrefix("<") {
+                firstUserMessage = String(text.prefix(120))
             }
         }
 
@@ -183,8 +193,28 @@ actor SessionMonitor {
             sessionId: sid,
             cwd: dir,
             projectDir: projectDir,
-            lastMessageAt: mtime,
+            lastMessageAt: fileModificationDate,
             firstUserMessage: firstUserMessage ?? ""
         )
+    }
+
+    /// Fast parse: only reads the first 15 lines (enough for metadata + first message).
+    /// Uses file modification date for lastMessageAt — avoids scanning thousands of lines.
+    private func parsePastSession(from file: URL, projectDir: String) -> PastSession? {
+        let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+
+        // Read only the head of the file — enough for metadata + first message
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+
+        var buffer = Data()
+        // Read up to ~8KB — more than enough for 15 JSONL lines
+        for _ in 0..<16 {
+            let chunk = handle.readData(ofLength: 512)
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+        }
+
+        return Self.parsePastSessionData(buffer, fileModificationDate: mtime, projectDir: projectDir)
     }
 }

@@ -10,7 +10,8 @@ class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
 // MARK: - AppDelegate
 
 @MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
+public class AppDelegate: NSObject, NSApplicationDelegate {
+    public override init() { super.init() }
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var statusView: ClickThroughHostingView<MenuBarView>?
@@ -27,11 +28,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let sessionPollInterval: TimeInterval = 5
     private let usagePollInterval: TimeInterval = 60
 
-    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+    nonisolated public func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in self.setup() }
     }
 
-    nonisolated func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    nonisolated public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         Task { @MainActor in self.showSettings() }
         return false
     }

@@ -1,6 +1,6 @@
 import Cocoa
+import ClamLib
 
-// main.swift always runs on the main thread
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()
