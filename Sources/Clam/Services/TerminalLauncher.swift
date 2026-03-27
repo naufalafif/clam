@@ -46,21 +46,62 @@ actor TerminalLauncher {
         let terminal = resolveTerminal(preferred: preferred)
         let claudePath = findClaude() ?? "claude"
 
-        // Pass args as array — no shell interpolation, no injection
+        // Build a shell command that cd's into the project and resumes.
+        // Uses login shell (-l) so the user's full PATH/env is available.
+        // The trailing `; exec $SHELL` keeps the window open if claude exits.
+        let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId); exec $SHELL"
+
         switch terminal {
         case .ghostty:
             launchCLI(bundleId: "com.mitchellh.ghostty", binaryName: "ghostty",
-                      args: ["-e", claudePath, "--resume", sessionId])
+                      args: ["-e", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
         case .alacritty:
             launchCLI(bundleId: "io.alacritty", binaryName: "alacritty",
-                      args: ["-e", claudePath, "--resume", sessionId])
+                      args: ["-e", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
         case .wezterm:
             launchCLI(bundleId: "com.github.wez.wezterm", binaryName: "wezterm",
-                      args: ["start", "--", claudePath, "--resume", sessionId])
+                      args: ["start", "--cwd", cwd, "--", "/bin/zsh", "-l", "-c", shellCmd], cwd: cwd, claudePath: claudePath)
         case .iterm2:
-            launchViaAppleScript(app: "iTerm", sessionId: sessionId)
+            launchViaAppleScript(app: "iTerm", claudePath: claudePath, sessionId: sessionId, cwd: cwd)
         case .terminal, .automatic:
-            launchViaAppleScript(app: "Terminal", sessionId: sessionId)
+            launchViaAppleScript(app: "Terminal", claudePath: claudePath, sessionId: sessionId, cwd: cwd)
+        }
+    }
+
+    // MARK: - Command building (internal for testing)
+
+    struct ResumeCommand {
+        let shellCmd: String       // full shell command string
+        let claudePath: String     // resolved absolute path to claude
+        let cwd: String
+        let sessionId: String
+    }
+
+    func buildResumeCommand(sessionId: String, cwd: String) -> ResumeCommand? {
+        guard sessionId.range(of: #"^[0-9a-fA-F\-]{36}$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        let claudePath = findClaude() ?? "claude"
+        let shellCmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId); exec $SHELL"
+        return ResumeCommand(shellCmd: shellCmd, claudePath: claudePath, cwd: cwd, sessionId: sessionId)
+    }
+
+    func buildAppleScript(app: String, claudePath: String, sessionId: String, cwd: String) -> String {
+        let cmd = "cd \(shellEscape(cwd)) && \(shellEscape(claudePath)) --resume \(sessionId)"
+        if app == "iTerm" {
+            return """
+            tell application "iTerm"
+                activate
+                create window with default profile command "\(cmd)"
+            end tell
+            """
+        } else {
+            return """
+            tell application "Terminal"
+                activate
+                do script "\(cmd)"
+            end tell
+            """
         }
     }
 
@@ -78,54 +119,44 @@ actor TerminalLauncher {
         return order.first(where: \.isInstalled) ?? .terminal
     }
 
-    private func launchCLI(bundleId: String, binaryName: String, args: [String]) {
+    private func launchCLI(bundleId: String, binaryName: String, args: [String], cwd: String, claudePath: String) {
         if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
             let binary = appURL.appendingPathComponent("Contents/MacOS/\(binaryName)")
             if FileManager.default.isExecutableFile(atPath: binary.path) {
-                launchProcess(binary.path, args: args)
+                launchProcess(binary.path, args: args, cwd: cwd)
                 return
             }
         }
 
         let paths = ["/opt/homebrew/bin/\(binaryName)", "/usr/local/bin/\(binaryName)"]
         if let found = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            launchProcess(found, args: args)
+            launchProcess(found, args: args, cwd: cwd)
             return
         }
 
         // Fallback to Terminal.app via AppleScript
-        launchViaAppleScript(app: "Terminal", sessionId: args.last ?? "")
+        launchViaAppleScript(app: "Terminal", claudePath: claudePath, sessionId: args.last ?? "", cwd: cwd)
     }
 
-    private func launchProcess(_ path: String, args: [String]) {
+    private func launchProcess(_ path: String, args: [String], cwd: String? = nil) {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: path)
         task.arguments = args
+        if let cwd, FileManager.default.fileExists(atPath: cwd) {
+            task.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        }
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         try? task.run()
     }
 
-    /// SECURITY: sessionId is pre-validated as UUID (alphanumeric + hyphens only)
-    /// so it's safe to interpolate into AppleScript. No shell metacharacters possible.
-    private func launchViaAppleScript(app: String, sessionId: String) {
-        let script: String
-        if app == "iTerm" {
-            script = """
-            tell application "iTerm"
-                activate
-                create window with default profile command "claude --resume \(sessionId)"
-            end tell
-            """
-        } else {
-            script = """
-            tell application "Terminal"
-                activate
-                do script "claude --resume \(sessionId)"
-            end tell
-            """
-        }
+    /// Shell-escape a string by wrapping in single quotes
+    func shellEscape(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 
+    private func launchViaAppleScript(app: String, claudePath: String, sessionId: String, cwd: String) {
+        let script = buildAppleScript(app: app, claudePath: claudePath, sessionId: sessionId, cwd: cwd)
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
             appleScript.executeAndReturnError(&error)

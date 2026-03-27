@@ -1,4 +1,4 @@
-.PHONY: build run release clean lint format check install uninstall dist icon
+.PHONY: build run release clean lint format check install uninstall dist icon test
 
 APP_NAME := Clam
 APP_BUNDLE := $(APP_NAME).app
@@ -74,7 +74,11 @@ format-check:
 		echo "swift-format not installed (brew install swift-format), skipping"; \
 	fi
 
-check: build lint format-check
+test:
+	@echo "--- Tests ---"
+	@swift Tests/test_terminal_launcher.swift
+
+check: build test lint format-check
 	@echo "All checks passed"
 
 icon:
