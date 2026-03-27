@@ -50,7 +50,8 @@ actor UsageMonitor {
     private func performOAuthRefresh() async {
         guard let token = readOAuthToken() else { return }
 
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+        guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else { return }
+        var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.timeoutInterval = 8
@@ -90,10 +91,16 @@ actor UsageMonitor {
 
     // MARK: - Rate limit parsing (reads ~/.claude/usage-cache.json)
 
-    private func readRateLimits() -> (fiveHour: RateLimit, sevenDay: RateLimit, sevenDaySonnet: RateLimit?) {
+    private struct RateLimits {
+        let fiveHour: RateLimit
+        let sevenDay: RateLimit
+        let sevenDaySonnet: RateLimit?
+    }
+
+    private func readRateLimits() -> RateLimits {
         guard let data = try? Data(contentsOf: cacheFile),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return (.empty, .empty, nil) }
+        else { return RateLimits(fiveHour: .empty, sevenDay: .empty, sevenDaySonnet: nil) }
 
         func parseLimit(_ key: String) -> RateLimit? {
             guard let block = json[key] as? [String: Any] else { return nil }
@@ -108,10 +115,10 @@ actor UsageMonitor {
             return RateLimit(utilization: utilization, resetsAt: resetsAt)
         }
 
-        return (
-            parseLimit("five_hour") ?? .empty,
-            parseLimit("seven_day") ?? .empty,
-            parseLimit("seven_day_sonnet")
+        return RateLimits(
+            fiveHour: parseLimit("five_hour") ?? .empty,
+            sevenDay: parseLimit("seven_day") ?? .empty,
+            sevenDaySonnet: parseLimit("seven_day_sonnet")
         )
     }
 
@@ -147,7 +154,7 @@ actor UsageMonitor {
         let monthStart = Self.monthStartString()
 
         let runs: [(args: [String], file: String)] = [
-            (["daily",   "--since", today,      "--json", "--offline", "--no-color"],
+            (["daily", "--since", today, "--json", "--offline", "--no-color"],
              "\(FileManager.default.homeDirectoryForCurrentUser.path)/.cache/clam/daily.json"),
             (["monthly", "--since", monthStart, "--json", "--offline", "--no-color"],
              "\(FileManager.default.homeDirectoryForCurrentUser.path)/.cache/clam/monthly.json")

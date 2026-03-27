@@ -150,9 +150,10 @@ struct SessionSearchView: View {
                     ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
                         .transition(.opacity)
                 } else if !query.isEmpty {
-                    Button(action: { query = "" }) {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
+                    Button(
+                        action: { query = "" },
+                        label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    )
                     .buttonStyle(.plain)
                     .transition(.opacity)
                 }

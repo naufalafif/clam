@@ -15,7 +15,7 @@ struct UsageSectionView: View {
 
             if usage.dailyTokens != nil || usage.monthlyTokens != nil {
                 Divider().padding(.vertical, 2)
-                if let daily = usage.dailyTokens   { tokenRow("Today", usage: daily) }
+                if let daily = usage.dailyTokens { tokenRow("Today", usage: daily) }
                 if let monthly = usage.monthlyTokens { tokenRow("Month", usage: monthly) }
             }
         }

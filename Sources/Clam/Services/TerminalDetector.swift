@@ -20,19 +20,19 @@ actor TerminalDetector {
 
     // Display name overrides for known apps (optional cosmetic)
     private static let displayNames: [String: String] = [
-        "com.mitchellh.ghostty":       "Ghostty",
-        "com.termius-dmg.mac":         "Termius",
-        "com.microsoft.VSCode":        "VS Code",
+        "com.mitchellh.ghostty": "Ghostty",
+        "com.termius-dmg.mac": "Termius",
+        "com.microsoft.VSCode": "VS Code",
         "com.todesktop.230313mzl4w4u9": "Cursor",
-        "md.obsidian":                 "Obsidian",
-        "com.googlecode.iterm2":       "iTerm2",
-        "com.apple.Terminal":          "Terminal",
-        "io.alacritty":                "Alacritty",
-        "com.github.wez.wezterm":      "WezTerm",
-        "net.kovidgoyal.kitty":        "Kitty",
-        "io.zed.Zed":                  "Zed",
+        "md.obsidian": "Obsidian",
+        "com.googlecode.iterm2": "iTerm2",
+        "com.apple.Terminal": "Terminal",
+        "io.alacritty": "Alacritty",
+        "com.github.wez.wezterm": "WezTerm",
+        "net.kovidgoyal.kitty": "Kitty",
+        "io.zed.Zed": "Zed",
         "co.warpdotdev.warp-terminal": "Warp",
-        "com.hyper-is.hyper":          "Hyper",
+        "com.hyper-is.hyper": "Hyper",
     ]
 
     func detect(claudePID: Int32) -> DetectedTerminal? {
@@ -82,7 +82,10 @@ actor TerminalDetector {
             guard let appName = app.localizedName else { return false }
             return appName == baseName
                 || appName.hasPrefix(baseName)
-                || (helperApp.bundleIdentifier.map { app.bundleIdentifier?.hasPrefix($0.components(separatedBy: ".").prefix(3).joined(separator: ".")) ?? false } ?? false)
+                || (helperApp.bundleIdentifier.map { bid in
+                    let prefix = bid.components(separatedBy: ".").prefix(3).joined(separator: ".")
+                    return app.bundleIdentifier?.hasPrefix(prefix) ?? false
+                } ?? false)
         }
         // Prefer the one without "Helper" in its name
         return candidates.first { !($0.localizedName?.contains("Helper") ?? false) }
@@ -108,7 +111,8 @@ actor TerminalDetector {
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return "" }
         return withUnsafeBytes(of: info.kp_proc.p_comm) { ptr -> String in
             let bytes = ptr.bindMemory(to: CChar.self)
-            return String(cString: bytes.baseAddress!)
+            guard let base = bytes.baseAddress else { return "" }
+            return String(cString: base)
         }
     }
 }
