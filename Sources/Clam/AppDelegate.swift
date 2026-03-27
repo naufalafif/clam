@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         button.action = #selector(togglePopover)
         button.target = self
+        button.sendAction(on: .leftMouseDown)
 
         let view = ClickThroughHostingView(rootView: MenuBarView(activeCount: 0, fiveHourPct: 0, fiveHourReset: ""))
         view.frame = NSRect(x: 0, y: 0, width: 80, height: 22)
@@ -61,7 +62,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupPopover() {
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 300, height: 420)
+        popover.contentSize = NSSize(width: 300, height: 300)
         popover.behavior = .transient
         popover.animates = true
         // Set content once — state changes via @Published auto-update SwiftUI
@@ -138,10 +139,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             fiveHourReset: state.usageData.fiveHour.resetLabel
         )
         statusView?.rootView = view
-        let width = max(80, (statusView?.fittingSize.width ?? 80) + 8)
-        statusView?.frame = NSRect(x: 0, y: 0, width: width, height: 22)
-        statusItem.button?.frame = statusView?.frame ?? NSRect(x: 0, y: 0, width: width, height: 22)
-        statusItem.length = width
+        // Defer frame update to the next run loop cycle so the hosting view's
+        // layout pass from the rootView change completes first.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let statusView = self.statusView else { return }
+            let width = max(80, statusView.fittingSize.width + 8)
+            statusView.frame = NSRect(x: 0, y: 0, width: width, height: 22)
+            self.statusItem.button?.frame = statusView.frame
+            self.statusItem.length = width
+        }
     }
 
     // MARK: - Popover
@@ -151,6 +157,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            // Sync popover size with the SwiftUI view's dynamic height
+            if let hostingVC = popover.contentViewController as? NSHostingController<MenuContentView> {
+                let size = hostingVC.view.fittingSize
+                popover.contentSize = NSSize(width: 300, height: size.height)
+            }
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()

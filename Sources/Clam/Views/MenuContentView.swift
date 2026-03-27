@@ -15,20 +15,49 @@ struct MenuContentView: View {
             header
             Divider()
 
-            // Sessions scrollable — variable height
-            ScrollView {
+            // Sessions — responsive height, scrollable only after 3
+            if state.activeSessions.count > 3 {
+                ScrollView {
+                    sessionsSection
+                }
+                .frame(height: 144) // 3 rows × ~40px + header
+            } else {
                 sessionsSection
             }
 
             Divider().padding(.vertical, 2)
-            // Usage pinned — fixed height
+            // Usage pinned
             usageSection
             Divider().padding(.vertical, 2)
-            // Actions pinned at bottom — always visible
+            // Actions pinned at bottom
             actionsSection
                 .padding(.bottom, 6)
         }
-        .frame(width: 300, height: 420)
+        .frame(width: 300, height: popoverHeight)
+    }
+
+    /// Dynamic popover height based on session count
+    private var popoverHeight: CGFloat {
+        let headerHeight: CGFloat = 34    // header + divider
+        let usageHeight: CGFloat = 102   // usage section + dividers
+        let actionsHeight: CGFloat = 117  // all buttons + quit + padding
+        let sessionHeaderHeight: CGFloat = 24
+        let rowHeight: CGFloat = 40
+        let emptyRowHeight: CGFloat = 34
+
+        let count = state.activeSessions.count
+        let sessionsHeight: CGFloat
+        if !state.isSessionsLoaded {
+            sessionsHeight = sessionHeaderHeight + 2 * rowHeight // skeleton
+        } else if count == 0 {
+            sessionsHeight = sessionHeaderHeight + emptyRowHeight
+        } else if count <= 3 {
+            sessionsHeight = sessionHeaderHeight + CGFloat(count) * rowHeight
+        } else {
+            sessionsHeight = 144 // capped at 3 rows for scroll
+        }
+
+        return headerHeight + sessionsHeight + usageHeight + actionsHeight
     }
 
     // MARK: - Header
