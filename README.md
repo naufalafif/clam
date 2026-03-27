@@ -29,7 +29,7 @@ Clam lives in your menu bar and gives you quick access to your Claude Code sessi
 ### Homebrew
 
 ```sh
-brew install naufalafif/tap/clam
+brew install --cask naufalafif/tap/clam
 ```
 
 ### Manual
