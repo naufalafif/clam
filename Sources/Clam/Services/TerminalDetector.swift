@@ -123,6 +123,20 @@ extension DetectedTerminal {
     @MainActor
     func activate() {
         guard let app = NSRunningApplication(processIdentifier: pid) else { return }
-        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        if app.isHidden { app.unhide() }
+
+        // NSRunningApplication.activate() does NOT restore minimized windows.
+        // AppleScript "reopen" simulates a Dock-icon click, which deminiaturizes
+        // windows before activation. Fall back to plain activate() if no bundle ID.
+        if let bundleId = bundleIdentifier {
+            let source = "tell application id \"\(bundleId)\" to reopen\n"
+                + "tell application id \"\(bundleId)\" to activate"
+            if let script = NSAppleScript(source: source) {
+                var error: NSDictionary?
+                script.executeAndReturnError(&error)
+            }
+        } else {
+            app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        }
     }
 }
