@@ -15,7 +15,7 @@
 ---
 
 <p align="center">
-  <img src="assets/screenshots/clam-with-config.png" width="700" alt="Clam popover and settings">
+  <img src="assets/screenshots/clam-menubar.png" width="320" alt="Clam menu bar popover">
 </p>
 
 ## Overview
