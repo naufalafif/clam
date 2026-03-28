@@ -14,6 +14,10 @@
 
 ---
 
+<p align="center">
+  <img src="assets/screenshots/clam-with-config.png" width="700" alt="Clam popover and settings">
+</p>
+
 ## Overview
 
 Clam lives in your menu bar and gives you quick access to your Claude Code sessions and API usage at a glance.
@@ -55,7 +59,11 @@ Clam runs as a menu bar app — no dock icon, no windows to manage.
 - Rate limits with color-coded progress bars
 - Token usage and cost for today and this month
 
-**Search sessions** (`⌘K` from the popover) to find and resume past conversations.
+**Search sessions** to find and resume past conversations. Active sessions show a green dot and focus the terminal on click.
+
+<p align="center">
+  <img src="assets/screenshots/clam-search-session.png" width="560" alt="Search sessions panel">
+</p>
 
 **Settings** let you pick your preferred terminal (Ghostty, iTerm2, Terminal, Alacritty, WezTerm) and enable launch at login.
 
