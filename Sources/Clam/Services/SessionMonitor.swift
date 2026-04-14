@@ -198,23 +198,110 @@ actor SessionMonitor {
         )
     }
 
-    /// Fast parse: only reads the first 15 lines (enough for metadata + first message).
-    /// Uses file modification date for lastMessageAt — avoids scanning thousands of lines.
+    /// Fast parse: reads the first 15 lines for metadata + first message, then scans the
+    /// remainder of the file (capped) to build a lowercased full-text search blob.
     private func parsePastSession(from file: URL, projectDir: String) -> PastSession? {
         let mtime = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
 
-        // Read only the head of the file — enough for metadata + first message
+        // Cap total read at 1MB per session file to bound startup cost.
+        let maxBytes = 1_000_000
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
 
         var buffer = Data()
-        // Read up to ~8KB — more than enough for 15 JSONL lines
-        for _ in 0..<16 {
-            let chunk = handle.readData(ofLength: 512)
+        buffer.reserveCapacity(min(maxBytes, 64 * 1024))
+        while buffer.count < maxBytes {
+            let chunk = handle.readData(ofLength: 32 * 1024)
             if chunk.isEmpty { break }
             buffer.append(chunk)
         }
 
-        return Self.parsePastSessionData(buffer, fileModificationDate: mtime, projectDir: projectDir)
+        // If we hit the cap mid-line, trim to the last complete line so JSON parse doesn't choke.
+        if buffer.count == maxBytes, let lastNewline = buffer.lastIndex(of: UInt8(ascii: "\n")) {
+            buffer = buffer.prefix(through: lastNewline)
+        }
+
+        guard var session = Self.parsePastSessionData(buffer, fileModificationDate: mtime, projectDir: projectDir) else {
+            return nil
+        }
+        session.filePath = file.path
+        session.searchBlob = Self.buildSearchBlob(from: buffer)
+        return session
+    }
+
+    /// Concatenate all user/assistant message text across the buffer, lowercased and
+    /// truncated per-message, to serve as a search index.
+    static func buildSearchBlob(from data: Data) -> String {
+        var blob = ""
+        blob.reserveCapacity(min(data.count / 4, 256 * 1024))
+
+        var startIndex = data.startIndex
+        while startIndex < data.endIndex {
+            let end = data[startIndex...].firstIndex(of: UInt8(ascii: "\n")) ?? data.endIndex
+            let lineData = data[startIndex..<end]
+            startIndex = end < data.endIndex ? data.index(after: end) : data.endIndex
+
+            guard let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
+            guard let type = json["type"] as? String, type == "user" || type == "assistant" else { continue }
+            let text = extractMessageText(json["message"])
+            if text.isEmpty { continue }
+            blob.append(text.prefix(500).lowercased())
+            blob.append("\n")
+        }
+        return blob
+    }
+
+    /// Message content can be a plain string or an array of content blocks.
+    /// Extract plain text from either shape.
+    static func extractMessageText(_ message: Any?) -> String {
+        guard let msg = message as? [String: Any] else { return "" }
+        if let s = msg["content"] as? String { return s }
+        guard let blocks = msg["content"] as? [[String: Any]] else { return "" }
+        var parts: [String] = []
+        for block in blocks {
+            if let text = block["text"] as? String { parts.append(text) }
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    // MARK: - Full conversation load (for preview pane)
+
+    /// Read a JSONL file and parse every user/assistant message in order.
+    func loadConversation(filePath: String) -> [ConversationMessage] {
+        guard !filePath.isEmpty,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: filePath))
+        else { return [] }
+
+        var messages: [ConversationMessage] = []
+        var startIndex = data.startIndex
+        var index = 0
+        let isoFormatter = ISO8601DateFormatter()
+
+        while startIndex < data.endIndex {
+            let end = data[startIndex...].firstIndex(of: UInt8(ascii: "\n")) ?? data.endIndex
+            let lineData = data[startIndex..<end]
+            startIndex = end < data.endIndex ? data.index(after: end) : data.endIndex
+
+            guard let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let type = json["type"] as? String else { continue }
+
+            let role: ConversationMessage.Role
+            switch type {
+            case "user": role = .user
+            case "assistant": role = .assistant
+            default: continue
+            }
+
+            let text = Self.extractMessageText(json["message"])
+            // Skip meta/tool-result placeholders that start with "<" (like the current fast parse)
+            if text.isEmpty || text.hasPrefix("<") { continue }
+
+            var ts: Date?
+            if let s = json["timestamp"] as? String { ts = isoFormatter.date(from: s) }
+
+            messages.append(ConversationMessage(id: index, role: role, text: text, timestamp: ts))
+            index += 1
+        }
+        return messages
     }
 }
