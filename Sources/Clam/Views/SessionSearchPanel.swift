@@ -50,15 +50,19 @@ class SessionSearchPanelController {
         }
 
         let activeSessionIds = Set(activeSessions.map(\.sessionId))
-        let activeAsPast = activeSessions.map { session in
-            PastSession(
+        let cacheById = Dictionary(uniqueKeysWithValues: sessionCache.map { ($0.sessionId, $0) })
+        let activeAsPast = activeSessions.map { session -> PastSession in
+            let cached = cacheById[session.sessionId]
+            return PastSession(
                 sessionId: session.sessionId,
                 cwd: session.cwd,
-                projectDir: "",
+                projectDir: cached?.projectDir ?? "",
                 lastMessageAt: session.startedAt,
-                firstUserMessage: "",
+                firstUserMessage: cached?.firstUserMessage ?? "",
                 isActive: true,
-                terminal: session.terminal
+                terminal: session.terminal,
+                filePath: cached?.filePath ?? "",
+                searchBlob: cached?.searchBlob ?? ""
             )
         }
 
@@ -83,9 +87,24 @@ class SessionSearchPanelController {
             let all = await monitor.fetchPastSessions()
             sessionCache = all
             cacheDate = Date()
+            let byId = Dictionary(uniqueKeysWithValues: all.map { ($0.sessionId, $0) })
+            let enrichedActive = activeSessions.map { session -> PastSession in
+                let cached = byId[session.sessionId]
+                return PastSession(
+                    sessionId: session.sessionId,
+                    cwd: session.cwd,
+                    projectDir: cached?.projectDir ?? "",
+                    lastMessageAt: session.startedAt,
+                    firstUserMessage: cached?.firstUserMessage ?? "",
+                    isActive: true,
+                    terminal: session.terminal,
+                    filePath: cached?.filePath ?? "",
+                    searchBlob: cached?.searchBlob ?? ""
+                )
+            }
             let pastFiltered = all.filter { !activeSessionIds.contains($0.sessionId) }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                model.sessions = activeAsPast + pastFiltered
+                model.sessions = enrichedActive + pastFiltered
                 model.isLoading = false
                 model.isRefreshing = false
             }
@@ -95,6 +114,7 @@ class SessionSearchPanelController {
     private func presentPanel(preferredTerminal: TerminalLauncher.PreferredTerminal) {
         let view = SessionSearchView(
             model: model,
+            monitor: monitor,
             onSelect: { [weak self] session in
                 guard let self else { return }
                 if session.isActive,
@@ -118,7 +138,7 @@ class SessionSearchPanelController {
         let hosting = NSHostingController(rootView: view)
 
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 480),
             styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -133,7 +153,7 @@ class SessionSearchPanelController {
 
         if let screen = NSScreen.main {
             let vis = screen.visibleFrame
-            p.setFrameOrigin(NSPoint(x: vis.midX - 280, y: vis.midY - 100))
+            p.setFrameOrigin(NSPoint(x: vis.midX - 430, y: vis.midY - 140))
         }
 
         panel = p
@@ -146,6 +166,7 @@ class SessionSearchPanelController {
 
 struct SessionSearchView: View {
     @ObservedObject var model: SessionSearchModel
+    let monitor: SessionMonitor
     let onSelect: (PastSession) -> Void
     let onClose: () -> Void
 
@@ -160,7 +181,13 @@ struct SessionSearchView: View {
                 || $0.shortPath.lowercased().contains(q)
                 || $0.firstUserMessage.lowercased().contains(q)
                 || $0.sessionId.lowercased().hasPrefix(q)
+                || $0.searchBlob.contains(q)
         }
+    }
+
+    private var selectedSession: PastSession? {
+        guard let id = selectedId else { return nil }
+        return filtered.first(where: { $0.id == id })
     }
 
     var body: some View {
@@ -195,46 +222,61 @@ struct SessionSearchView: View {
 
             Divider()
 
-            Group {
-                if model.isLoading {
-                    Spacer()
-                    ProgressView("Loading sessions…")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                } else if filtered.isEmpty {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "tray")
-                            .font(.system(size: 28))
-                            .foregroundStyle(.secondary)
-                        Text(query.isEmpty ? "No past sessions found" : "No results for \"\(query)\"")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(filtered) { session in
-                                PastSessionRowView(
-                                    session: session,
-                                    isSelected: selectedId == session.id
-                                ) { onSelect(session) }
-                                .onHover { if $0 { selectedId = session.id } }
-                                .transition(.asymmetric(
-                                    insertion: .opacity.combined(with: .move(edge: .top)),
-                                    removal: .opacity
-                                ))
+            HStack(spacing: 0) {
+                Group {
+                    if model.isLoading {
+                        VStack {
+                            Spacer()
+                            ProgressView("Loading sessions…")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    } else if filtered.isEmpty {
+                        VStack(spacing: 8) {
+                            Spacer()
+                            Image(systemName: "tray")
+                                .font(.system(size: 28))
+                                .foregroundStyle(.secondary)
+                            Text(query.isEmpty ? "No past sessions found" : "No results for \"\(query)\"")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(filtered) { session in
+                                    PastSessionRowView(
+                                        session: session,
+                                        isSelected: selectedId == session.id
+                                    ) { selectedId = session.id }
+                                    .transition(.asymmetric(
+                                        insertion: .opacity.combined(with: .move(edge: .top)),
+                                        removal: .opacity
+                                    ))
 
-                                if session.id != filtered.last?.id {
-                                    Divider().padding(.horizontal, 16)
+                                    if session.id != filtered.last?.id {
+                                        Divider().padding(.horizontal, 16)
+                                    }
                                 }
                             }
+                            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: filtered.map(\.id))
                         }
-                        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: filtered.map(\.id))
                     }
                 }
+                .frame(width: 360)
+                .frame(maxHeight: .infinity)
+
+                Divider()
+
+                ConversationPreview(
+                    session: selectedSession,
+                    monitor: monitor,
+                    query: query,
+                    onOpen: { onSelect($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             Divider()
@@ -261,7 +303,7 @@ struct SessionSearchView: View {
                     .animation(.easeInOut(duration: 0.2), value: model.isRefreshing)
                 }
                 Spacer()
-                Text("↵ select  ·  esc close")
+                Text("click to preview  ·  ↵ open  ·  esc close")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -269,13 +311,9 @@ struct SessionSearchView: View {
             .padding(.vertical, 8)
             .background(.regularMaterial)
         }
-        .frame(width: 560, height: 420)
+        .frame(width: 860, height: 480)
         .background(KeyEventHandler(onEscape: onClose, onReturn: {
-            if let id = selectedId, let session = filtered.first(where: { $0.id == id }) {
-                onSelect(session)
-            } else if let first = filtered.first {
-                onSelect(first)
-            }
+            if let session = selectedSession { onSelect(session) }
         }))
     }
 }
@@ -329,6 +367,164 @@ struct PastSessionRowView: View {
         }
         .buttonStyle(.plain)
         .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+    }
+}
+
+// MARK: - Right-side preview pane showing the selected session's full conversation
+
+struct ConversationPreview: View {
+    let session: PastSession?
+    let monitor: SessionMonitor
+    let query: String
+    let onOpen: (PastSession) -> Void
+
+    @State private var messages: [ConversationMessage] = []
+    @State private var isLoading = false
+    @State private var loadedSessionId: String?
+
+    var body: some View {
+        Group {
+            if let session {
+                content(for: session)
+            } else {
+                placeholder("Select a session to preview its conversation")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
+    }
+
+    @ViewBuilder
+    private func content(for session: PastSession) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if session.isActive {
+                        Circle().fill(Color(hex: "#22c55e")).frame(width: 6, height: 6)
+                    }
+                    Text(session.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Text(session.isActive ? "active" : session.relativeDate)
+                        .font(.system(size: 11))
+                        .foregroundStyle(session.isActive ? Color(hex: "#22c55e") : .secondary)
+                    Spacer()
+                    Button(action: { onOpen(session) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: session.isActive ? "arrow.up.right.square" : "play.fill")
+                                .font(.system(size: 10))
+                            Text(session.isActive ? "Focus" : "Resume")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.accentColor)
+                        )
+                        .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text(session.cwd)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if isLoading && messages.isEmpty {
+                Spacer()
+                HStack { Spacer(); ProgressView().scaleEffect(0.7); Spacer() }
+                Spacer()
+            } else if messages.isEmpty {
+                Spacer()
+                Text("No messages")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                Spacer()
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            ForEach(messages) { msg in
+                                MessageBubble(message: msg)
+                                    .id(msg.id)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                    }
+                    .onChange(of: messages.count) { _ in
+                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+        }
+        .task(id: session.id) { await load(session) }
+    }
+
+    @ViewBuilder
+    private func placeholder(_ text: String) -> some View {
+        VStack {
+            Spacer()
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding()
+            Spacer()
+        }
+    }
+
+    private func load(_ session: PastSession) async {
+        guard loadedSessionId != session.id else { return }
+        guard !session.filePath.isEmpty else {
+            messages = []
+            loadedSessionId = session.id
+            return
+        }
+        isLoading = true
+        let path = session.filePath
+        let loaded = await monitor.loadConversation(filePath: path)
+        if Task.isCancelled { return }
+        messages = loaded
+        loadedSessionId = session.id
+        isLoading = false
+    }
+}
+
+private struct MessageBubble: View {
+    let message: ConversationMessage
+
+    var body: some View {
+        HStack {
+            if message.role == .user { Spacer(minLength: 40) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(message.role == .user ? "You" : "Claude")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(message.text)
+                    .font(.system(size: 12))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(message.role == .user
+                          ? Color.accentColor.opacity(0.15)
+                          : Color.secondary.opacity(0.10))
+            )
+            if message.role == .assistant { Spacer(minLength: 40) }
+        }
     }
 }
 
