@@ -20,8 +20,17 @@ actor SessionMonitor {
     private let claudeDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude")
 
+    /// Cache of `--name` flag values per PID. A process's args are immutable for
+    /// its lifetime, so each PID is parsed at most once. Pruned to alive PIDs on
+    /// every fetch.
+    private var nameCache: [Int32: String?] = [:]
+
     func fetchActiveSessions() async -> [ActiveSession] {
         let pids = aliveClaudioPIDs()
+        let aliveSet = Set(pids)
+        nameCache = nameCache.filter { aliveSet.contains($0.key) }
+        await detector.evict(alive: aliveSet)
+
         var sessions: [ActiveSession] = []
 
         for pid in pids {
@@ -41,7 +50,12 @@ actor SessionMonitor {
                 startedAt = Date()
             }
 
-            let name = json["name"] as? String ?? parseSessionName(pid: pid)
+            let name: String?
+            if let jsonName = json["name"] as? String, !jsonName.isEmpty {
+                name = jsonName
+            } else {
+                name = cachedName(for: pid)
+            }
             let terminal = await detector.detect(claudePID: pid)
 
             sessions.append(ActiveSession(
@@ -55,6 +69,13 @@ actor SessionMonitor {
         }
 
         return sessions.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    private func cachedName(for pid: Int32) -> String? {
+        if let cached = nameCache[pid] { return cached }
+        let name = parseSessionName(pid: pid)
+        nameCache[pid] = name
+        return name
     }
 
     // MARK: - Past sessions from JSONL project files
@@ -102,32 +123,69 @@ actor SessionMonitor {
     }
 
     private func parseSessionName(pid: Int32) -> String? {
-        // Read args via sysctl to avoid spawning a subprocess
+        // Read args via sysctl to avoid spawning a subprocess.
         var argmax = 0
         var mib: [Int32] = [CTL_KERN, KERN_ARGMAX]
         var size = MemoryLayout<Int>.stride
-        sysctl(&mib, 2, &argmax, &size, nil, 0)
+        guard sysctl(&mib, 2, &argmax, &size, nil, 0) == 0, argmax > 0 else { return nil }
 
         var args = [CChar](repeating: 0, count: argmax)
         var argsSize = argmax
         var mib2: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
-        guard sysctl(&mib2, 3, &args, &argsSize, nil, 0) == 0 else { return nil }
+        guard sysctl(&mib2, 3, &args, &argsSize, nil, 0) == 0, argsSize > 4 else { return nil }
 
-        let raw = args.withUnsafeBufferPointer { ptr -> String in
-            String(bytes: ptr.map { UInt8(bitPattern: $0) }, encoding: .utf8) ?? ""
+        // sysctl wrote `argsSize` bytes into the buffer; the rest is uninitialized zeros.
+        // Scan only the written bytes — the original code decoded the full 1 MB argmax
+        // buffer as UTF-8 and ran a Unicode-aware split, which dominated CPU at idle.
+        return args.withUnsafeBytes { raw -> String? in
+            let used = UnsafeRawBufferPointer(rebasing: raw.prefix(argsSize))
+            return Self.extractNameFlag(from: used)
         }
+    }
 
-        // Look for --name flag
-        let parts = raw.components(separatedBy: "\0").filter { !$0.isEmpty }
-        for (i, part) in parts.enumerated() {
-            if part == "--name", i + 1 < parts.count {
-                return parts[i + 1]
+    /// Scan a `KERN_PROCARGS2` buffer for the value of the `--name` flag.
+    /// Layout: `int32 argc; char exec_path[]; alignment NULs; argv strings; envp strings`
+    /// (see xnu `bsd/kern/kern_sysctl.c`). All segments are NUL-terminated.
+    /// Internal for testing.
+    static func extractNameFlag(from bytes: UnsafeRawBufferPointer) -> String? {
+        let count = bytes.count
+        guard count > 4 else { return nil }
+
+        var i = 4 // skip argc (int32)
+        while i < count, bytes[i] != 0 { i += 1 } // skip exec_path
+        while i < count, bytes[i] == 0 { i += 1 } // skip alignment NULs
+
+        let nameFlag = Array("--name".utf8)
+        let nameEqual = Array("--name=".utf8)
+        var awaitingValue = false
+
+        while i < count {
+            var end = i
+            while end < count, bytes[end] != 0 { end += 1 }
+            let len = end - i
+
+            if awaitingValue {
+                guard len > 0 else { return nil }
+                let slice = UnsafeRawBufferPointer(rebasing: bytes[i..<end])
+                return String(bytes: slice, encoding: .utf8)
             }
-            if part.hasPrefix("--name=") {
-                return String(part.dropFirst("--name=".count))
+            if len == nameFlag.count, bytesEqual(bytes, at: i, nameFlag) {
+                awaitingValue = true
+            } else if len > nameEqual.count, bytesEqual(bytes, at: i, nameEqual) {
+                let valueStart = i + nameEqual.count
+                let slice = UnsafeRawBufferPointer(rebasing: bytes[valueStart..<end])
+                return String(bytes: slice, encoding: .utf8)
             }
+            i = end + 1
         }
         return nil
+    }
+
+    private static func bytesEqual(
+        _ buf: UnsafeRawBufferPointer, at offset: Int, _ pattern: [UInt8]
+    ) -> Bool {
+        guard offset + pattern.count <= buf.count, let base = buf.baseAddress else { return false }
+        return memcmp(base + offset, pattern, pattern.count) == 0
     }
 
     // MARK: - Parsing helper (internal for testing)
