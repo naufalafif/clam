@@ -35,7 +35,23 @@ actor TerminalDetector {
         "com.hyper-is.hyper": "Hyper",
     ]
 
+    /// Cache by claude PID. The parent chain is fixed for a process's lifetime
+    /// (modulo re-parenting on terminal death, which we accept as stale until the
+    /// claude PID itself dies). Pruned by `evict(alive:)` from the caller.
+    private var cache: [Int32: DetectedTerminal?] = [:]
+
+    func evict(alive: Set<Int32>) {
+        cache = cache.filter { alive.contains($0.key) }
+    }
+
     func detect(claudePID: Int32) -> DetectedTerminal? {
+        if let cached = cache[claudePID] { return cached }
+        let result = walkAndDetect(claudePID: claudePID)
+        cache[claudePID] = result
+        return result
+    }
+
+    private func walkAndDetect(claudePID: Int32) -> DetectedTerminal? {
         var pid = getParentPID(claudePID) ?? 0
         var depth = 0
 

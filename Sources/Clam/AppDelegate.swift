@@ -25,8 +25,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private let usageMonitor = UsageMonitor()
     private let terminalLauncher = TerminalLauncher()
 
-    private let sessionPollInterval: TimeInterval = 5
+    /// Session poll cadence is faster while the popover is visible (so the user
+    /// sees fresh data) and backs off when the menu is closed.
+    private let activeSessionPollInterval: TimeInterval = 5
+    private let idleSessionPollInterval: TimeInterval = 30
     private let usagePollInterval: TimeInterval = 60
+    private var isPopoverOpen = false
 
     nonisolated public func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in self.setup() }
@@ -66,6 +70,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentSize = NSSize(width: 300, height: 300)
         popover.behavior = .transient
         popover.animates = true
+        popover.delegate = self
         // Set content once — state changes via @Published auto-update SwiftUI
         popover.contentViewController = NSHostingController(
             rootView: MenuContentView(
@@ -103,7 +108,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             while true {
-                try? await Task.sleep(nanoseconds: UInt64(sessionPollInterval) * 1_000_000_000)
+                let interval = isPopoverOpen ? activeSessionPollInterval : idleSessionPollInterval
+                try? await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
                 await refreshSessions()
             }
         }
@@ -228,5 +234,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             activeSessions: state.activeSessions,
             onFocusSession: { [weak self] session in self?.focusSession(session) }
         )
+    }
+}
+
+// MARK: - NSPopoverDelegate (idle backoff: poll fast while popover is open)
+
+extension AppDelegate: NSPopoverDelegate {
+    public func popoverDidShow(_ notification: Notification) {
+        isPopoverOpen = true
+        // Refresh immediately on open — the periodic loop may be mid-sleep.
+        Task { await refreshSessions() }
+    }
+
+    public func popoverDidClose(_ notification: Notification) {
+        isPopoverOpen = false
     }
 }

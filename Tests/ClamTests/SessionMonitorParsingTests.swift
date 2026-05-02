@@ -90,4 +90,83 @@ struct SessionMonitorParsingTests {
         )
         #expect(result?.firstUserMessage == "")
     }
+
+    // MARK: - extractNameFlag (KERN_PROCARGS2 byte scanner)
+
+    @Test("extractNameFlag finds --name <value>")
+    func nameFlagSpaceForm() {
+        let buf = makeProcArgs(
+            execPath: "/usr/local/bin/claude",
+            argv: ["claude", "--name", "Project X", "--resume", "abc-123"]
+        )
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == "Project X")
+    }
+
+    @Test("extractNameFlag finds --name=value")
+    func nameFlagEqualForm() {
+        let buf = makeProcArgs(
+            execPath: "/usr/local/bin/claude",
+            argv: ["claude", "--name=Hello", "--resume"]
+        )
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == "Hello")
+    }
+
+    @Test("extractNameFlag returns nil when no --name flag")
+    func noNameFlag() {
+        let buf = makeProcArgs(
+            execPath: "/usr/local/bin/claude",
+            argv: ["claude", "--resume", "abc-123"]
+        )
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == nil)
+    }
+
+    @Test("extractNameFlag returns nil for buffer too small")
+    func tooSmall() {
+        let buf: [UInt8] = [1, 2, 3]
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == nil)
+    }
+
+    @Test("extractNameFlag returns nil when --name is the last arg with no value")
+    func nameWithoutValue() {
+        let buf = makeProcArgs(
+            execPath: "/usr/local/bin/claude",
+            argv: ["claude", "--name"]
+        )
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == nil)
+    }
+
+    @Test("extractNameFlag does not match --names or --namespace")
+    func similarFlagsNotMatched() {
+        let buf = makeProcArgs(
+            execPath: "/usr/local/bin/claude",
+            argv: ["claude", "--names", "foo", "--namespace=bar"]
+        )
+        let result = buf.withUnsafeBytes { SessionMonitor.extractNameFlag(from: $0) }
+        #expect(result == nil)
+    }
+}
+
+/// Build a synthetic `KERN_PROCARGS2` buffer for testing.
+/// Layout: int32 argc; exec_path NUL; one alignment NUL; argv strings; envp strings.
+private func makeProcArgs(execPath: String, argv: [String], envp: [String] = []) -> [UInt8] {
+    var bytes: [UInt8] = []
+    let argc = Int32(argv.count)
+    withUnsafeBytes(of: argc.littleEndian) { bytes.append(contentsOf: $0) }
+    bytes.append(contentsOf: execPath.utf8)
+    bytes.append(0)
+    bytes.append(0) // alignment NUL — real macOS uses variable padding; one NUL is enough for the scanner
+    for arg in argv {
+        bytes.append(contentsOf: arg.utf8)
+        bytes.append(0)
+    }
+    for env in envp {
+        bytes.append(contentsOf: env.utf8)
+        bytes.append(0)
+    }
+    return bytes
 }
