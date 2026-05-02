@@ -410,21 +410,24 @@ struct ConversationPreview: View {
                         .font(.system(size: 11))
                         .foregroundStyle(session.isActive ? Color(hex: "#22c55e") : .secondary)
                     Spacer()
-                    Button(action: { onOpen(session) }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: session.isActive ? "arrow.up.right.square" : "play.fill")
-                                .font(.system(size: 10))
-                            Text(session.isActive ? "Focus" : "Resume")
-                                .font(.system(size: 11, weight: .medium))
+                    Button(
+                        action: { onOpen(session) },
+                        label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: session.isActive ? "arrow.up.right.square" : "play.fill")
+                                    .font(.system(size: 10))
+                                Text(session.isActive ? "Focus" : "Resume")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(Color.accentColor)
+                            )
+                            .foregroundStyle(.white)
                         }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(Color.accentColor)
-                        )
-                        .foregroundStyle(.white)
-                    }
+                    )
                     .buttonStyle(.plain)
                 }
                 Text(session.cwd)
