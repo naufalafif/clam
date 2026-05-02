@@ -54,6 +54,10 @@ struct PastSession: Identifiable {
     let firstUserMessage: String
     var isActive: Bool = false
     var terminal: DetectedTerminal?
+    /// Absolute path to the JSONL file backing this session (empty if unknown).
+    var filePath: String = ""
+    /// Lowercased concatenation of message bodies, built during indexing for full-text search.
+    var searchBlob: String = ""
 
     var id: String { sessionId }
 
@@ -73,4 +77,14 @@ struct PastSession: Identifiable {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: lastMessageAt, relativeTo: Date())
     }
+}
+
+// MARK: - Single message in a conversation (for preview pane)
+
+struct ConversationMessage: Identifiable {
+    enum Role { case user, assistant }
+    let id: Int
+    let role: Role
+    let text: String
+    let timestamp: Date?
 }
